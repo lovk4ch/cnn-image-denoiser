@@ -6,9 +6,14 @@ from torch import Tensor
 from torch.utils.data import DataLoader
 from tqdm import tqdm
 
-from .dataset import ImageDataset
+from .dataset import ImageDataset, collate_patches
+from .progress import TrainingProgress
+from .resources import EpochResources
+from .evaluator import evaluate
 from ..models.denoiser import Denoiser
-from ..utils.model import save_weights, load_weights, load_config, get_device
+from ..utils.model import save_weights, load_weights, load_config, get_device, atomic_save
+from ..utils.errors import CheckpointError, CheckpointMessages
+from ..utils.results import create_result_dir
 from ..utils.noise import add_noise
 from ..utils.common import get_criterion, get_psnr, save_tensor_as_jpg, padding_cat, beep, \
     img_to_tensor
@@ -26,21 +31,52 @@ class Trainer:
         self.criterion = get_criterion(self.cfg["train"])
         self.optim = torch.optim.Adam(self.model.parameters(), lr=self.cfg["train"]["lr"])
 
-        load_weights(self.model, self.cfg, self.device)
+        self.checkpoint_path = Path(self.cfg["data"]["ckpt_dir"]) / self.cfg["data"]["denoise_checkpoint"]
+        self.start_epoch = 1
+        self.step = 0
+        self.best_loss = float("inf")
+        self.best_train_psnr = float("-inf")
+        self.best_eval_psnr = float("-inf")
+        self.eval_signature = None
+        self.previous_metrics = None
+
+        if self.checkpoint_path.exists():
+            try:
+                state = torch.load(self.checkpoint_path, map_location=self.device, weights_only=True)
+
+                if (state["config"]["denoise"] != self.cfg["denoise"] or
+                        state["config"]["train"]["loss"] != self.cfg["train"]["loss"]):
+                    raise ValueError(CheckpointMessages.CONFIG_MISMATCH)
+
+                self.model.load_state_dict(state["model"])
+                self.optim.load_state_dict(state["optimizer"])
+                self.start_epoch = state["epoch"] + 1
+                self.step = state["step"]
+                self.best_loss = state["best_loss"]
+                self.best_train_psnr = state.get("best_train_psnr", float("-inf"))
+                self.best_eval_psnr = state.get("best_eval_psnr", float("-inf"))
+                self.eval_signature = state.get("eval_signature")
+                self.previous_metrics = state.get("metrics")
+                torch.set_rng_state(state["rng"].cpu())
+
+                if self.device.type == "cuda" and "cuda_rng" in state:
+                    torch.cuda.set_rng_state_all([rng.cpu() for rng in state["cuda_rng"]])
+            except Exception as exc:
+                raise CheckpointError(CheckpointMessages.LOAD_FAILED.format(path=self.checkpoint_path)) from exc
+        else:
+            load_weights(self.model, self.cfg, self.device, allow_missing=True)
+
         self.model.train()
 
     @property
     def grad(self):
-        grad_norm = 0.0
-        for p in self.model.parameters():
-            if p.grad is not None:
-                grad_norm += p.grad.detach().pow(2).sum().item()
-        return grad_norm ** 0.5
+        norms = [p.grad.detach().pow(2).sum() for p in self.model.parameters() if p.grad is not None]
+        return torch.stack(norms).sum().sqrt().item() if norms else 0.0
 
     def __call__(self, batch: Tensor) -> Tuple[Tensor, Tensor, Tensor]:
         # +[0..1]
         with torch.no_grad():
-            noisy = add_noise(batch)
+            noisy = add_noise(batch, self.cfg.get("noise"))
 
         # [-1..1]
         batch = (batch * 2 - 1)
@@ -65,70 +101,131 @@ class Trainer:
         train_dir = Path(self.cfg["data"]["train_dir"])
         train_dir.mkdir(parents=True, exist_ok=True)
 
-        cache_dir = Path(self.cfg["data"]["cache_dir"])
-        if self.cfg["global"]["clean_cache"]:
-            import shutil
-            shutil.rmtree(cache_dir, ignore_errors=True)
-        cache_dir.mkdir(parents=True, exist_ok=True)
+        result_dir = create_result_dir(self.cfg)
+        result_index = 1
+        progress = TrainingProgress(result_dir, self.previous_metrics)
 
         train_dataset = ImageDataset(
             crop_size=self.cfg["train"]["train_crop"],
             root=train_dir,
             transform=img_to_tensor(),
+            patches_per_image=self.cfg["train"].get("patches_per_image", 1),
         )
 
         train_loader = DataLoader(
-            pin_memory=True,
-            batch_size=1,
+            pin_memory=self.device.type == "cuda",
+            batch_size=self.cfg["train"]["batch_size"],
+            collate_fn=collate_patches,
             shuffle=True,
             num_workers=1,
             drop_last=False,
             dataset=train_dataset,
         )
 
-        index = 1
+        index = self.step + 1
         epochs = self.cfg["train"]["epochs"]
-        cache_every = self.cfg["train"]["cache_every"]
+        result_every = self.cfg["train"]["result_every"]
+        grad_every = max(1, self.cfg["train"].get("grad_every", 25))
 
-        for epoch in range(1, epochs + 1):
-            bar = tqdm(train_loader, desc=f"\033[99mepoch {epoch}")
+        grad_norm = 0.0
+        tqdm.write(f"Training photos: {len(train_dataset.paths)}; patches per epoch: {len(train_dataset)}")
 
-            g_loss = 0
-            g_psnr = 0
+        for epoch in range(self.start_epoch, epochs + 1):
+            resources = EpochResources(self.device)
+            resources.start()
 
-            for batch in bar:
-                batch = batch.to(self.device, non_blocking=True)
-                batch, noisy, clean = self(batch)
+            try:
+                bar = tqdm(train_loader, desc=f"\033[99mepoch {epoch}")
 
-                psnr = get_psnr(batch, clean)
-                g_psnr += psnr or 0
+                g_loss = 0
+                g_psnr = 0
+                samples = 0
 
-                g_loss += self.loss or 0
+                for batch in bar:
+                    batch = batch.to(self.device, non_blocking=True)
+                    batch, noisy, clean = self(batch)
 
-                bar.set_postfix(
-                    grad_denoise=f"{self.grad:.3f}",
-                    iter=f"{index}",
-                    loss=f"{self.loss or 0:.3f}",
-                    psnr=f"{psnr or 0:.3f}"
-                )
+                    count = batch.size(0)
 
-                if cache_every > 0 and index % cache_every / train_loader.batch_size == 0:
-                    out = [batch, noisy, clean]
-                    out = [t for t in out if t is not None]
-                    rows = []
-                    for i in range(batch.size(0)):
-                        border = int(batch.size(3) * 10 // 1024)
-                        row = padding_cat(out, border=border)
-                        rows.append(row)
-                        grid = torch.cat(rows, dim=1)
-                        save_tensor_as_jpg(grid, f'{self.cfg["data"]["cache_dir"]}step_res_{index}.jpg')
+                    with torch.no_grad():
+                        psnr = sum(get_psnr(batch[i], clean[i]) for i in range(count)) / count
 
-                index += 1
-            print()
+                    samples += count
+                    g_psnr += psnr * count
 
-            save_weights(self.model, self.cfg)
-            g_loss /= bar.total
-            g_psnr /= bar.total
-            print(f"epoch {epoch}: loss={g_loss:.3f}, psnr={g_psnr:.3f}")
+                    g_loss += self.loss * count
+
+                    if index == self.step + 1 or index % grad_every == 0:
+                        grad_norm = self.grad
+
+                    progress.batch(bar, samples=samples, total=len(train_dataset), loss=self.loss,
+                                   psnr=psnr, lr=self.optim.param_groups[0]["lr"], grad=grad_norm, step=index)
+
+                    if result_every > 0 and index % result_every == 0:
+                        out = [batch, noisy, clean]
+                        out = [t for t in out if t is not None]
+                        rows = []
+
+                        for i in range(batch.size(0)):
+                            border = int(batch.size(3) * 10 // 1024)
+                            row = padding_cat([t[i:i + 1] for t in out], border=border)
+                            rows.append(row)
+
+                        grid = torch.cat(rows, dim=2)
+                        save_tensor_as_jpg(grid, result_dir / f"{result_index:05d}.jpg")
+                        result_index += 1
+
+                    index += 1
+
+                print()
+
+                g_loss /= samples
+                g_psnr /= samples
+                improved = g_psnr > self.best_train_psnr
+                eval_metrics = evaluate(self.model, self.cfg, self.device, result_dir / f"eval_epoch_{epoch:05d}") if self.cfg["eval"]["enabled"] else None
+                eval_psnr = eval_metrics["psnr"] if eval_metrics else None
+
+                if eval_metrics and self.eval_signature != eval_metrics["signature"]:
+                    self.best_eval_psnr = float("-inf")
+                    self.eval_signature = eval_metrics["signature"]
+
+                eval_improved = eval_psnr is not None and eval_psnr > self.best_eval_psnr
+                self.best_train_psnr = max(self.best_train_psnr, g_psnr)
+
+                if eval_improved:
+                    self.best_eval_psnr = eval_psnr
+
+                self.best_loss = min(self.best_loss, g_loss)
+                self.step = index - 1
+                state = {
+                    "model": self.model.state_dict(), "optimizer": self.optim.state_dict(),
+                    "epoch": epoch, "step": self.step, "best_loss": self.best_loss,
+                    "config": self.cfg, "rng": torch.get_rng_state(),
+                    "metrics": {"loss": g_loss, "psnr": g_psnr},
+                    "best_train_psnr": self.best_train_psnr, "best_eval_psnr": self.best_eval_psnr,
+                    "eval_metrics": eval_metrics,
+                    "eval_signature": self.eval_signature,
+                }
+
+                if self.device.type == "cuda":
+                    state["cuda_rng"] = torch.cuda.get_rng_state_all()
+
+                atomic_save(state, self.checkpoint_path)
+
+                if improved:
+                    atomic_save(state, self.checkpoint_path.with_name(f"{self.checkpoint_path.stem}_best_train.pth"))
+
+                if eval_improved:
+                    atomic_save(state, self.checkpoint_path.with_name(f"{self.checkpoint_path.stem}_best_eval.pth"))
+
+                if eval_improved or (eval_psnr is None and improved):
+                    save_weights(self.model, self.cfg)
+            finally:
+                usage = resources.finish()
+
+            progress.epoch(epoch, samples, g_loss, g_psnr, self.optim.param_groups[0]["lr"], improved, usage,
+                           eval_psnr=eval_psnr, best_eval=eval_improved,
+                           best_train_score=self.best_train_psnr,
+                           best_eval_score=self.best_eval_psnr if eval_psnr is not None else None)
 
         beep()

@@ -13,7 +13,7 @@
     <div class="demo-label">
       CNN-based Image Denoiser<br>
       Demo mode<br>
-      MAX OUTPUT IMAGE SIZE = 460 px
+      MAX IMAGE SIZE = 512 px PER SIDE
     </div>
 
     <div class="floating-container">
@@ -28,6 +28,7 @@
         <button class="glossy-button" id="choose-btn">
           CHOOSE IMAGE
         </button>
+        <p id="error-message" role="alert"></p>
       </div>
 
       <div class="iterations-container">
@@ -42,7 +43,7 @@
         </div>
       </div>
 
-      <input type="file" id="file-input" accept="image/*" hidden>
+      <input type="file" id="file-input" accept="image/jpeg,image/png,image/webp,image/bmp" hidden>
     </div>
 
     <script src="static/js/main.js" defer></script>

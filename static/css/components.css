@@ -117,3 +117,42 @@
     animation: neonPulse 1.5s infinite ease-in-out !important;
     pointer-events: none;
 }
+
+#error-message {
+    max-width: 400px;
+    color: #ffb4b4;
+    overflow-wrap: anywhere;
+}
+
+@media (max-width: 600px), (max-height: 750px) {
+    body {
+        justify-content: center;
+        align-items: flex-start;
+        padding: 140px 20px 40px;
+    }
+
+    .floating-container {
+        width: 100%;
+        max-width: 404px;
+        margin-top: 0;
+    }
+
+    .mirror-container {
+        width: 100%;
+    }
+
+    .mirror-frame {
+        box-sizing: border-box;
+        width: 100%;
+        height: auto;
+        aspect-ratio: 1;
+    }
+
+    .glossy-button {
+        width: 100%;
+    }
+
+    .iterations-container {
+        margin-top: 35px;
+    }
+}

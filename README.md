@@ -172,3 +172,43 @@ Denoised Image
 * Move towards diffusion-based denoising
 * Add FiLM filters to adjust the level and type of noise
 * Add transformed-based restoration models net for the next improvement of out images
+
+## Installation
+
+Use Python 3.11 or 3.12 and a separate virtual environment. The base requirements file contains direct project dependencies; choose one PyTorch profile for Windows/Linux x86-64.
+
+NVIDIA RTX 2070 (CUDA 12.1 build; requires a compatible NVIDIA driver):
+
+```powershell
+python -m pip install -r requirements-cuda.txt
+```
+
+CPU:
+
+```powershell
+python -m pip install -r requirements-cpu.txt
+```
+
+Verify the selected environment:
+
+```powershell
+python -c "import torch, torchvision; print(torch.__version__, torchvision.__version__, torch.version.cuda, torch.cuda.is_available())"
+python -m pip check
+```
+
+The profiles pin torch 2.5.1 and torchvision 0.20.1. For GPUs requiring newer builds, choose a supported matched pair and wheel index from the [official PyTorch installer](https://pytorch.org/get-started/locally/). CUDA builds depend on GPU architecture and driver compatibility; a separate wheel is not needed for every card model. Installing a CUDA toolkit alone does not convert CPU wheels into CUDA wheels. The Dockerfile uses the CPU profile.
+
+`requirements.txt` contains direct dependencies, not a complete lock file. Transitive dependencies are resolved by pip. Evaluation uses data/test as a validation set: fixed Gaussian noise (sigma 0.03), a deterministic center crop up to 512 pixels, and a single denoising pass. Keep these photos and their scenes independent from training; reserve another untouched set for final testing.
+
+## Train and evaluation
+
+```powershell
+python src/main.py --mode train
+python src/main.py --mode eval
+```
+
+`eval.enabled: true` runs evaluation after each training epoch. Set it to `false` to train without evaluation. Standalone `--mode eval` always runs evaluation using exported `denoise.pth` weights. Original test images are not modified. Reports contain train and eval PSNR; evaluation image reports also include noisy input PSNR. Evaluation samples are saved under `eval_epoch_#####` (or `eval` for standalone runs).
+
+Checkpoints: `denoise_cpt.pth` resumes the latest training state; `denoise_cpt_best_train.pth` and `denoise_cpt_best_eval.pth` store full states selected independently by maximum train/eval PSNR. `denoise.pth` exports best eval weights for the API (best train weights when evaluation is disabled). Historical `denoise_cpt_best.pth` is no longer updated. Evaluation scores reset when the test files or evaluation settings change. Train PSNR is measured on stochastic training batches, so it is less suitable for model selection than fixed evaluation PSNR.
+
+Photo import inventory: `data/train_import.csv` records source paths and pixel dimensions for copied training JPGs. Every training photo contributes `patches_per_image` random crops per epoch.

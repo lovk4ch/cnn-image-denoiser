@@ -1,35 +1,7 @@
 import torch
 from torch import nn
 
-
-class ResBlock(nn.Module):
-    def __init__(self, use_norm: bool = False, dilation: int = 1, cfg: dict | None = None):
-        super().__init__()
-        cfg = cfg or {}
-
-        channels = int(cfg.get("channels", 64))
-        k = int(cfg.get("kernel_size", 3))
-
-        norm_groups = int(cfg.get("norm_groups", 8))
-
-        layers = [
-            nn.Conv2d(channels, channels, k, dilation=dilation, padding=dilation * (k - 1) // 2, bias=True),
-        ]
-        if use_norm:
-            layers.append(nn.GroupNorm(norm_groups, channels))
-        layers.append(nn.ReLU(inplace=True))
-
-        layers.append(
-            nn.Conv2d(channels, channels, k, dilation=dilation, padding=dilation * (k - 1) // 2, bias=True),
-        )
-        if use_norm:
-            layers.append(nn.GroupNorm(norm_groups, channels))
-
-        self.net = nn.Sequential(*layers)
-        self.act = nn.ReLU(inplace=True)
-
-    def forward(self, x):
-        return self.act(x + self.net(x))   # skip + activation
+from ..utils.errors import ModelMessages
 
 
 class Denoiser(nn.Module):
@@ -42,20 +14,23 @@ class Denoiser(nn.Module):
         features: int = int(cfg.get("channels", 64))
         depth: int = int(cfg.get("depth", 5))
         k = int(cfg.get("kernel_size", 3))
+
+        if k < 1 or k % 2 == 0:
+            raise ValueError(ModelMessages.INVALID_KERNEL)
+
         use_norm: bool = bool(cfg.get("use_norm", False))
         norm_groups: int = int(cfg.get("norm_groups", 8))
 
         # dilation: список или число
         dil = cfg.get("dilation", 1)
+
         if isinstance(dil, (list, tuple)):
             dilation_list = [int(x) for x in dil]
         else:
             dilation_list = [int(dil)] * max(depth + 2, 2)  # +2: in/out
 
-        # гарантируем длину: [in] + depth + [out]
-        need_len = depth + 2
-        if len(dilation_list) < need_len:
-            dilation_list = dilation_list + [dilation_list[-1]] * (need_len - len(dilation_list))
+        if len(dilation_list) != depth + 2 or any(d < 1 for d in dilation_list):
+            raise ValueError(ModelMessages.INVALID_DILATION)
 
         # --- входной слой ---
         # переводит изображение в пространство признаков
@@ -77,6 +52,7 @@ class Denoiser(nn.Module):
         # регистрация слоёв в PyTorch
         # последовательность одинаковых conv-блоков
         blocks = []
+
         for i in range(depth):
             d = dilation_list[i + 1]
             block = [
@@ -89,8 +65,10 @@ class Denoiser(nn.Module):
                     bias=False if use_norm else True,
                 )
             ]
+
             if use_norm:
                 block.append(nn.GroupNorm(norm_groups, features))
+
             block.append(nn.ReLU(inplace=True))
             blocks.append(nn.Sequential(*block))
 
@@ -110,6 +88,8 @@ class Denoiser(nn.Module):
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         x = self.act(self.conv_in(x))
+
         for block in self.blocks:
             x = block(x)
+
         return self.conv_out(x)

@@ -8,6 +8,7 @@ const displayImg = document.getElementById('display-image');
 const placeholder = document.getElementById('placeholder');
 const chooseBtn = document.getElementById('choose-btn');
 const fileInput = document.getElementById('file-input');
+const errorMessage = document.getElementById('error-message');
 
 // Считываем время анимации прямо из CSS
 const style = getComputedStyle(document.documentElement);
@@ -18,6 +19,9 @@ const scaleLabels = document.querySelectorAll('.scale-label');
 
 let selectedIterations = 1;
 let selectedFile = null;
+let imageUrl = null;
+let imageTimer = null;
+let pendingImageUrl = null;
 
 
 // Установка фона
@@ -48,11 +52,16 @@ sliderInput.addEventListener('input', (e) => {
 
 // Плавная смена картинки
 function updateImage(src) {
+    clearTimeout(imageTimer);
+    if (pendingImageUrl) URL.revokeObjectURL(pendingImageUrl);
+    pendingImageUrl = src.startsWith('blob:') ? src : null;
     displayImg.classList.remove('fading-in');
     displayImg.classList.add('fading-out');
 
-    setTimeout(() => {
-        displayImg.src = src;
+    imageTimer = setTimeout(() => {
+        const previousUrl = imageUrl;
+        imageUrl = src.startsWith('blob:') ? src : null;
+        pendingImageUrl = null;
         displayImg.style.display = 'block';
         displayImg.style.transition = `opacity var(--fade-duration) ease-in-out`;
         placeholder.style.display = 'none';
@@ -60,12 +69,16 @@ function updateImage(src) {
         displayImg.onload = () => {
             displayImg.classList.replace('fading-out', 'fading-in');
         };
+        displayImg.src = src;
+        if (previousUrl) URL.revokeObjectURL(previousUrl);
     }, 255); // Небольшой зазор для начала исчезновения
 }
 
 // Обработка выбора файла
 fileInput.addEventListener('change', (e) => {
     const file = e.target.files[0];
+    fileInput.value = '';
+    errorMessage.textContent = '';
     if (file) {
         selectedFile = file;
         const reader = new FileReader();
@@ -77,6 +90,7 @@ fileInput.addEventListener('change', (e) => {
 
 // Отправка на сервер
 async function sendToServer(file) {
+    errorMessage.textContent = '';
     chooseBtn.disabled = true;
     frame.classList.add('processing'); // Включаем пульсацию рамки
 
@@ -98,7 +112,12 @@ async function sendToServer(file) {
         chooseBtn.textContent = 'PROCESSING...';
         const response = await fetch('/predict', { method: 'POST', body: formData });
 
-        if (!response.ok) throw new Error('Server error');
+        if (!response.ok) {
+            const error = await response.json().catch(() => ({}));
+            const detail = typeof error.detail === 'string'
+                ? error.detail : 'Unable to process the image. Please check the file and try again.';
+            throw new Error(detail);
+        }
 
         const blob = await response.blob();
         updateImage(URL.createObjectURL(blob)); // Показываем результат
@@ -107,6 +126,9 @@ async function sendToServer(file) {
         selectedFile = null;
     } catch (err) {
         console.error(err);
+        errorMessage.textContent = err.message;
+        displayImg.classList.remove('fading-out');
+        displayImg.classList.add('fading-in');
         chooseBtn.textContent = 'ERROR! TRY AGAIN';
     } finally {
         chooseBtn.disabled = false;
@@ -124,3 +146,8 @@ if (!selectedFile) {
 });
 
 window.addEventListener("load", setRandomBackground);
+window.addEventListener('pagehide', () => {
+    clearTimeout(imageTimer);
+    if (imageUrl) URL.revokeObjectURL(imageUrl);
+    if (pendingImageUrl) URL.revokeObjectURL(pendingImageUrl);
+});

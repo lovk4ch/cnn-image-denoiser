@@ -1,6 +1,5 @@
 import argparse
 
-from denoiser import Trainer
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
@@ -13,7 +12,11 @@ if __name__ == "__main__":
     args = parser.parse_args()
 
     if args.mode == "train":
+        from denoiser.training.trainer import Trainer
+
         trainer = Trainer()
         trainer.run()
     else:
-        exit()
+        from denoiser.training.evaluator import run_evaluation
+
+        run_evaluation()
