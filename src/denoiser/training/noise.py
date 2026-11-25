@@ -1,6 +1,6 @@
 import torch
 import torch.nn.functional as F
-from .errors import NoiseMessages
+from denoiser.utils.errors import NoiseMessages
 
 
 def blotch_noise_like(x, scale_range=(0.09, 0.35), blur_k_range=(0, 5)):
@@ -206,14 +206,20 @@ def add_luminance_iso_noise(
     return rgb
 
 
-def add_noise(x, percentages=None):
+def add_noise(x, percentages=None, *, return_modes=False):
     """Select a noise level independently for each image; percentages are sampling probabilities."""
-    percentages = percentages or {"clean": 10, "near_zero": 15, "low": 25, "iso": 35, "mix": 10, "hard": 5}
-    modes = ("clean", "near_zero", "low", "iso", "mix", "hard")
+    config = percentages or {"gaussian": 100}
+    bounds_gaussian = config.get("gaussian_sigma", (0.03, 0.03))
+    percentages = config.get("types", config)
+    modes = tuple(percentages)
+    allowed = {"gaussian", "clean", "near_zero", "low", "iso", "mix", "hard"}
 
-    if (set(percentages) != set(modes) or any(value < 0 for value in percentages.values())
+    if (not modes or not set(modes) <= allowed or any(value < 0 for value in percentages.values())
             or abs(sum(percentages.values()) - 100) > 1e-6):
         raise ValueError(NoiseMessages.INVALID_PERCENTAGES)
+
+    if len(bounds_gaussian) != 2 or not 0 <= bounds_gaussian[0] <= bounds_gaussian[1] <= 1:
+        raise ValueError(NoiseMessages.INVALID_SIGMA)
 
     weights = torch.tensor([percentages[mode] for mode in modes], dtype=torch.float32)
     selections = torch.multinomial(weights, x.size(0), replacement=True)
@@ -224,8 +230,8 @@ def add_noise(x, percentages=None):
 
         if mode == "clean":
             noisy = image
-        elif mode in {"near_zero", "low"}:
-            bounds = (0.0001, 0.002) if mode == "near_zero" else (0.002, 0.01)
+        elif mode in {"gaussian", "near_zero", "low"}:
+            bounds = bounds_gaussian if mode == "gaussian" else (0.0001, 0.002) if mode == "near_zero" else (0.002, 0.01)
             sigma = torch.empty((), device=x.device).uniform_(*bounds)
             noisy = (image + sigma * torch.randn_like(image)).clamp(0, 1)
         else:
@@ -233,7 +239,8 @@ def add_noise(x, percentages=None):
 
         outputs.append(noisy)
 
-    return torch.cat(outputs)
+    result = torch.cat(outputs)
+    return (result, [modes[index] for index in selections.tolist()]) if return_modes else result
 
 
 def _add_noise_mode(x, mode):

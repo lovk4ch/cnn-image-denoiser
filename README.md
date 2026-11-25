@@ -1,35 +1,12 @@
-# CNN-based Image Denoiser
-*High-Performance Local-Context Neural Image Restoration Model*
+# CNN Image Denoiser
 
-<div align="center">
-  <a href="https://cnn-image-denoiser.onrender.com">
-    <b>Live demo is available here</a>
-    <br>
-  ❗️ Note: try to use images lower than 512x512 to prevent memory overrun
-    </b>
-</div>
+Нейросеть для удаления шума из RGB-фотографий на PyTorch. Включает собственную свёрточную модель, обучение с синтетическим шумом, оценку качества, FastAPI с веб-интерфейсом и интерактивный график обучения на Apache ECharts.
 
----
+Модель предсказывает добавленный шум. Очищенное изображение получается вычитанием предсказания из входа. Качество зависит от обучающих эталонов и соответствия синтетического шума реальным изображениям. Удаление шума не восстанавливает гарантированно потерянные детали, смаз или пересвеченные участки.
 
-## Project Overview
+## Примеры обработки
 
-**CNN-based Image Denoiser** is a neural network model for image denoising based on **convolutional neural networks (CNNs)**.
-The model efficiently restores images using **local patterns and textures**, making it ideal for **real-time and embedded systems** where speed and stability are critical.
-
-The project demonstrates a classic **low-level computer vision** approach, comparable to traditional filters and modern transformers.
-
-⚠️ This implementation is a demonstration of convolutional neural networks and does not currently represent a universal solution for defect removal. For different types of photos with artifacts of varying structure a good result is not guaranteed.
-
----
-
-## Processing examples
-
-**The example photos were processed in two passes. Network parameters:**
-* feature channels = 64
-* kernel size = 3
-* layers = 5
-* dilation = [1, 1, 1, 2, 1, 1, 1]
-* image size = 1024
+Исторические примеры отдельных экспериментов. Они не являются отчётом текущих весов; актуальные сравнения сохраняются в `data/result`.
 
 <p align="center">
   <img src="https://github.com/lovk4ch/cnn_denoiser/blob/master/data/demo/images/ex_003_layers%3D3_channels%3D48.jpg" width="500"><br>
@@ -56,159 +33,195 @@ The project demonstrates a classic **low-level computer vision** approach, compa
   <em>Removing fine roughness</em>
 </p>
 
----
+## Архитектура
 
-## Objective
+Текущая конфигурация находится в `src/denoiser/config/project.yaml`.
 
-* Additive noise removal (Gaussian/synthetic noise)
-* Local detail restoration
+| Параметр | Значение |
+|---|---|
+| Вход и выход | RGB, 3 канала |
+| Внутренние каналы | 64 |
+| `depth` | 5 внутренних свёрток |
+| Всего свёрток | 7: входная, 5 внутренних, выходная |
+| Ядро | 3 × 3 |
+| Dilation | `[1, 1, 1, 2, 1, 1, 1]` |
+| Активация | LeakyReLU, отрицательный наклон 0.1 |
+| Обучаемые параметры | 188 163 при текущих настройках |
+| Область влияния выходного пикселя | 17 × 17 пикселей |
 
-Comparison with:
-* Classic filters (Gaussian, Median)
-* Baseline (Blur Filters)
-
----
-
-## Model Architecture
-
-```
-Input Image
-   ↓
-Convolution Block × N
-   ↓
-Residual Connections
-   ↓
-BatchNorm + ReLU
-   ↓
-Final Convolution
-   ↓
-Denoised Image
+```text
+RGB → Conv + LeakyReLU → (Conv + LeakyReLU) × depth → Conv → предсказанный шум
+Очищенное изображение = clamp(вход − предсказанный шум)
 ```
 
----
+Изображения преобразуются в диапазон `[-1, 1]`. Пространственное разрешение сохраняется за счёт padding. Отдельных residual-блоков и BatchNorm в текущей конфигурации нет. Через `use_norm` можно включить GroupNorm; по умолчанию нормализация отключена.
 
-## Key Components
+## Установка
 
-* **3x3 / 5x5 convolution layers**
-* **Residual blocks** for a stable gradients
-* **ReLU / LeakyReLU activations**
-* **Batch Normalization**
-
----
-
-## Advantages over Blur Filters
-
-### ❌ Classical Blur Filters
-
-* Gaussian / Median / Bilateral
-* Works only locally
-* Blurs the boundaries
-* Doesn't adapt to the scene structure
-
-### 🚀 Key Advantages
-
-* **Preserves local structures and textures**
-* **Adaptable to different noise levels**
-* **Fast inference suitable for embedded systems**
-
-### ✅ CNN-based Denoiser
-
-| Feature                       | Blur Filter | CNN |
-| ----------------------------- | ----------- | --- |
-| Local pattern recognition     | ⚡           | ✅   |
-| Edge / structure preservation | ❌           | ✅   |
-| Adaptive learning             | ❌           | ✅   |
-| Real-time inference           | ✅           | ⚡   |
-| Training on dataset           | ❌           | ✅   |
-
-### ⚠️ Trade-offs
-* Limited global context (patch-to-patch long-range)
-* Doesn't always perfectly reconstruct complex noise patterns
-
----
-
-## 📊 Evaluation Metrics
-
-### Image Quality
-
-* **PSNR** — Peak Signal-to-Noise Ratio
-* **SSIM** — Structural Similarity Index
-
----
-
-## Dataset
-
-* Synthetic noisy DSLR-images
-
-## Noise Model
-* Gaussian Noise (σ configurable)
-* Luminance ISO noise
-* Chroma noise
-* Various mixes of all types
-
----
-
-## Tech Stack
-
-* 🐍 Python
-* 🔥 PyTorch
-* 🖥️ Custom CNN architecture
-* 📊 TensorBoard
-
----
-
-## Key Takeaways
-
-* ✔️ Demonstrates **local-pattern-based denoising**
-* ✔️ Shows **practical use of CNNs in applied CV**
-* ✔️ Provides **baseline for comparison with transformer-based denoisers**
-* ✔️ Relevant for **Applied ML / Computer Vision roles**
-
----
-
-## 🔀 Next Releases:
-
-* Add attention layers for extended context (CNN + Attention)
-* Move towards diffusion-based denoising
-* Add FiLM filters to adjust the level and type of noise
-* Add transformed-based restoration models net for the next improvement of out images
-
-## Installation
-
-Use Python 3.11 or 3.12 and a separate virtual environment. The base requirements file contains direct project dependencies; choose one PyTorch profile for Windows/Linux x86-64.
-
-NVIDIA RTX 2070 (CUDA 12.1 build; requires a compatible NVIDIA driver):
+Используется Python 3.11 или 3.12. Команды выполняются из корня проекта.
 
 ```powershell
+python -m venv .venv
+.\.venv\Scripts\Activate.ps1
+```
+
+Установить один профиль зависимостей:
+
+```powershell
+# NVIDIA, сборка PyTorch с CUDA 12.1
 python -m pip install -r requirements-cuda.txt
-```
 
-CPU:
-
-```powershell
+# CPU
 python -m pip install -r requirements-cpu.txt
 ```
 
-Verify the selected environment:
+Профили закрепляют PyTorch 2.5.1 и torchvision 0.20.1. Для CUDA требуется совместимая видеокарта и драйвер. `requirements.txt` содержит общие зависимости без выбора сборки PyTorch.
 
 ```powershell
-python -c "import torch, torchvision; print(torch.__version__, torchvision.__version__, torch.version.cuda, torch.cuda.is_available())"
-python -m pip check
+python -c "import torch; print(torch.__version__, torch.version.cuda, torch.cuda.is_available())"
 ```
 
-The profiles pin torch 2.5.1 and torchvision 0.20.1. For GPUs requiring newer builds, choose a supported matched pair and wheel index from the [official PyTorch installer](https://pytorch.org/get-started/locally/). CUDA builds depend on GPU architecture and driver compatibility; a separate wheel is not needed for every card model. Installing a CUDA toolkit alone does not convert CPU wheels into CUDA wheels. The Dockerfile uses the CPU profile.
-
-`requirements.txt` contains direct dependencies, not a complete lock file. Transitive dependencies are resolved by pip. Evaluation uses data/test as a validation set: fixed Gaussian noise (sigma 0.03), a deterministic center crop up to 512 pixels, and a single denoising pass. Keep these photos and their scenes independent from training; reserve another untouched set for final testing.
-
-## Train and evaluation
+## Обучение
 
 ```powershell
 python src/main.py --mode train
+```
+
+`--mode` выбирает сценарий запуска. Поле `train.mode` в YAML сейчас не управляет переключением между обучением и оценкой.
+
+Из `data/train` читаются JPG, JPEG и PNG. Каждый файл используется `patches_per_image` раз за эпоху. При каждом обращении выбираются случайные размер из `train_crop` и положение патча. Маленькие изображения пропорционально увеличиваются до нужного размера. Вырезка выполняется до преобразования изображения в тензор; это не означает частичное декодирование JPEG. При batch больше единицы патчи дополнительно приводятся к общей стороне вырезкой.
+
+Шум генерируется заново на каждом шаге. Оптимизатор — Adam. Функция потерь задаётся через `train.loss`: `l1`, `mse`, `huber` или `smooth_l1`. Цель обучения — разность между зашумлённым изображением и эталоном.
+
+`train.epochs` — конечный номер эпохи. Если checkpoint содержит эпоху 100, значение 150 продолжит обучение с 101-й до 150-й. Значение 100 не запустит ещё сто эпох. После восстановления Adam применяется `lr` из текущего YAML.
+
+При подготовке датасета проверяются пустая папка и читаемость изображений. Первичная проверка декодирует все файлы и может занимать заметное время на большой выборке.
+
+## Синтетический шум
+
+```yaml
+noise:
+  types:
+    gaussian: 100
+  gaussian_sigma: [0.05, 0.05]
+```
+
+`types` задаёт вероятности выбора режима для каждого изображения; сумма должна быть 100. Доступны `gaussian`, `clean`, `near_zero`, `low`, `iso`, `mix`, `hard`.
+
+`gaussian_sigma` задаётся в шкале `[0, 1]`. Одинаковые границы означают фиксированную силу; `[0.01, 0.05]` выбирает случайную силу в этом диапазоне. Значение 0.05 соответствует стандартному отклонению 12.75 в шкале 0–255. Поле шума остаётся случайным даже при фиксированной силе. После добавления значения ограничиваются диапазоном `[0, 1]`.
+
+`iso` имитирует яркостный и цветовой шум, `mix` и `hard` включают дополнительные коррелированные компоненты и артефакты. Это синтетические модели, а не калибровка под конкретную камеру или ISO. Тип шума и его сила отдельным входом в нейросеть не передаются.
+
+## Оценка качества
+
+При `eval.enabled: true` оценка запускается после каждой обучающей эпохи. Отдельная проверка:
+
+```powershell
 python src/main.py --mode eval
 ```
 
-`eval.enabled: true` runs evaluation after each training epoch. Set it to `false` to train without evaluation. Standalone `--mode eval` always runs evaluation using exported `denoise.pth` weights. Original test images are not modified. Reports contain train and eval PSNR; evaluation image reports also include noisy input PSNR. Evaluation samples are saved under `eval_epoch_#####` (or `eval` for standalone runs).
+Отдельный eval загружает экспортированные лучшие веса, не обновляет модель и не добавляет эпоху в график обучения.
 
-Checkpoints: `denoise_cpt.pth` resumes the latest training state; `denoise_cpt_best_train.pth` and `denoise_cpt_best_eval.pth` store full states selected independently by maximum train/eval PSNR. `denoise.pth` exports best eval weights for the API (best train weights when evaluation is disabled). Historical `denoise_cpt_best.pth` is no longer updated. Evaluation scores reset when the test files or evaluation settings change. Train PSNR is measured on stochastic training batches, so it is less suitable for model selection than fixed evaluation PSNR.
+Для каждой фотографии из `data/test` берётся центральный квадрат до `eval.crop_size` пикселей. Применяются режимы из `eval.modes`, фиксированный seed и один проход очистки. Для Gaussian при наличии `noise.gaussian_sigma` используется этот диапазон; `eval.sigma` служит запасным значением. При неизменных файлах и настройках зашумлённые примеры повторяются между эпохами.
 
-Photo import inventory: `data/train_import.csv` records source paths and pixel dimensions for copied training JPGs. Every training photo contributes `patches_per_image` random crops per epoch.
+Метрики считаются по всем тестовым фотографиям. JPEG-коллаж содержит до десяти равномерно выбранных примеров: эталон, зашумлённый вход и результат. Подписи включают имя фотографии и PSNR. Ячейки имеют одинаковый размер по `eval.crop_size`; маленькие патчи увеличиваются только для отображения, после расчёта метрик.
+
+Для независимой проверки нужны фотографии и сцены, отсутствующие в train. Текущий `eval.allow_train_overlap: true` разрешает диагностическую проверку на обучающих изображениях. Для независимой оценки установить `false`: код проверит точное совпадение файлов, но похожие кадры одной сцены нужно исключать самостоятельно. Для окончательного тестирования следует сохранить отдельный набор, который не использовался при выборе настроек и checkpoint.
+
+### Метрики
+
+| Показатель | Значение | Критерий |
+|---|---|---|
+| Loss | Ошибка предсказания шума по выбранной функции потерь | Меньше при сопоставимых условиях |
+| Input PSNR | Зашумлённый вход относительно эталона | Базовый уровень для сравнения |
+| Output PSNR | Результат очистки относительно эталона | Выше — меньше квадратичная ошибка |
+| Gain | Output PSNR − Input PSNR | Положительное значение — улучшение |
+| RMSE | Корень из средней квадратичной ошибки результата в шкале 0–255 | Меньше — ближе к эталону |
+
+```text
+MSE  = mean((результат − эталон)²)
+RMSE = sqrt(MSE)
+PSNR = 20 × log10(255 / RMSE)   # для значений в шкале 0–255
+```
+
+В коде расчёт эквивалентен этой формуле, но выполняется для тензоров `[-1, 1]` с диапазоном 2. Сначала усредняется MSE по изображениям, затем вычисляется PSNR. Это отличается от среднего арифметического значений PSNR в dB. В общем eval каждый настроенный режим получает одинаковое число примеров.
+
+Для чистого входа Input PSNR бесконечен, поэтому Gain не определяется; внесённые искажения оцениваются по Output PSNR и RMSE. Train использует случайные патчи и шум, поэтому фиксированный независимый eval надёжнее для выбора модели. При изменении test или настроек шума прежние оценки напрямую не сравниваются; лучший eval пересчитывается для новой сигнатуры проверки.
+
+Численные метрики дополняются просмотром гладких поверхностей, границ, текста, шерсти и листвы. Важно одновременно уменьшать зерно и сохранять фактуру, не добавляя пятен и цветовых сдвигов. SSIM, сравнение с классическими фильтрами и оценка эстетики сейчас не реализованы.
+
+## Результаты и checkpoint
+
+Для сочетания числа слоёв, каналов и dilation используется одна папка:
+
+```text
+data/result/layers_7_channels_64_dilation_1-1-1-2-1-1-1/
+checkpoints/layers_7_channels_64_dilation_1-1-1-2-1-1-1/
+```
+
+Смена `lr`, количества эпох или параметров шума сохраняет папку и продолжает доступный checkpoint. Другая архитектура использует отдельное пространство весов; при отсутствии её checkpoint и экспорта обучение начинается с нуля.
+
+Имена файлов задаются в `data` конфигурации. Сейчас используются:
+
+| Файл | Назначение |
+|---|---|
+| `denoise_gaussian_cpt.pth` | Последнее состояние: модель, Adam, эпоха, шаг, RNG, настройки и метрики |
+| `denoise_gaussian_cpt_best_train.pth` | Полный checkpoint с лучшим train PSNR |
+| `denoise_gaussian_cpt_best_eval.pth` | Полный checkpoint с лучшим eval PSNR |
+| `denoise_gaussian.pth` | Экспорт весов лучшего eval для API и отдельной проверки; при отключённом eval — лучшего train |
+
+Checkpoint записываются атомарно. Для продолжения автоматически выбирается последнее состояние, а не лучший checkpoint.
+
+Файлы в папке результатов:
+
+- `config.yaml` — настройки последнего запуска для этой архитектуры.
+- `metrics.csv`, `metrics.md` — показатели по эпохам, время, RAM и VRAM; загрузка GPU выводится при доступности измерения.
+- `quality.csv` — Input/Output PSNR, Gain и RMSE по режимам шума.
+- `#####.jpg` — промежуточные обучающие сравнения.
+- `eval_epoch_#####.jpg` — коллаж проверки соответствующей эпохи.
+- `eval_epoch.jpg`, `eval_metrics.md`, `eval_metrics.csv` — отдельный запуск eval; перезаписываются при повторной проверке.
+
+## График обучения
+
+```powershell
+python src/denoiser/diagnostics/training_chart.py
+```
+
+Открывается `http://127.0.0.1:8765`. График читает CSV и обновляется после завершения эпохи. Панели показывают train/eval PSNR, Gaussian Gain и Loss. Поддерживаются выбор папки модели, масштабирование, экспорт PNG и открытие JPEG эпохи по клику на точку. Цвета, названия осей и анимация задаются константами в начале скрипта.
+
+```powershell
+python src/denoiser/diagnostics/training_chart.py --no-browser --port 8765
+```
+
+График работает, пока запущен его локальный сервер. ECharts хранится в `src/denoiser/diagnostics/vendor` и не требует подключения к интернету при наличии локального файла.
+
+## FastAPI и фронтенд
+
+```powershell
+python -m uvicorn denoiser.api.app:app --app-dir src --reload --reload-dir src --host 127.0.0.1 --port 8000
+```
+
+Веб-интерфейс: `http://127.0.0.1:8000`. В PyCharm доступна конфигурация `FastAPI` в `.idea/runConfigurations/FastAPI.xml`.
+
+`POST /predict` принимает файл и `iterations` от 1 до 3. Форматы: JPEG, PNG, WEBP и BMP без анимации. Ограничения: 10 МиБ и не более 512 пикселей по каждой стороне. Учитывается EXIF-ориентация. Результат возвращается как RGB PNG.
+
+API не добавляет синтетический шум и не рассчитывает PSNR без эталона. Обработка выполняется в `model.eval()` и `torch.inference_mode()`. Каждый следующий проход получает результат предыдущего; повторная очистка может усиливать размытие. Одновременно выполняется один запрос обработки; при занятости возвращается 503. Веса загружаются при старте API, поэтому после обучения сервер нужно перезапустить.
+
+## Данные и код
+
+| Путь | Назначение |
+|---|---|
+| `data/train` | Исходные обучающие эталоны |
+| `data/test` | Фотографии для проверки |
+| `data/result` | Метрики и визуализации моделей |
+| `data/demo/images` | Исторические иллюстрации README |
+| `data/codex` | Аудиты, списки, диагностические проверки и вспомогательные отчёты |
+| `src/denoiser/models` | Архитектура CNN |
+| `src/denoiser/training` | Датасет, шум, обучение, eval и работа с весами |
+| `src/denoiser/diagnostics` | Логи, JPEG-отчёты и интерактивный график |
+| `src/denoiser/api` | FastAPI и валидация запросов |
+| `static` | HTML, CSS и JavaScript веб-интерфейса |
+
+## Сторонние компоненты
+
+Локальная копия Apache ECharts распространяется с файлами `LICENSE` и `NOTICE` в `src/denoiser/diagnostics/vendor`. Они содержат лицензию и уведомления об авторстве библиотеки и сохраняются вместе с ней. Эти файлы не задают лицензию собственного кода проекта. Условия распространения ECharts описаны в [Apache License 2.0, раздел 4](https://www.apache.org/licenses/LICENSE-2.0).

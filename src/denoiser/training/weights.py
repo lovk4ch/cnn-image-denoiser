@@ -5,7 +5,8 @@ import tempfile
 import torch
 import yaml
 
-from .errors import CheckpointError, CheckpointMessages
+from denoiser.utils.errors import CheckpointError, CheckpointMessages
+from denoiser.utils.paths import model_name
 
 
 def get_device():
@@ -24,6 +25,11 @@ def load_config(path=None):
 
     for key in ("result_dir", "test_dir", "train_dir", "ckpt_dir"):
         cfg["data"][key] = str((project_dir / cfg["data"][key]).resolve())
+
+    checkpoints = Path(cfg["data"]["ckpt_dir"])
+
+    if checkpoints.name != model_name(cfg):
+        cfg["data"]["ckpt_dir"] = str(checkpoints / model_name(cfg))
 
     return cfg
 

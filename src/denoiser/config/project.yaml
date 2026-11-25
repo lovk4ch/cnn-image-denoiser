@@ -2,35 +2,40 @@ denoise:
   name: denoise
   channels: 64
   depth: 5
+  activation: leaky_relu
   kernel_size: 3
   dilation: [1, 1, 1, 2, 1, 1, 1]
 
 train:
   mode: denoise
-  epochs: 50
+  epochs: 100
   batch_size: 1
   patches_per_image: 3
-  lr: 0.003
+  lr: 0.0001
   # l1 | mse | huber | smooth_l1
   loss: l1
-  result_every: 25
-  grad_every: 25
+  result_every: 100
+  grad_every: 100
   train_crop: [512, 768, 1024]
-  test_crop: [512]
+  test_crop: [768]
+  live_progress: false
+  log_every: 100
 
 noise:
-  clean: 10
-  near_zero: 15
-  low: 25
-  iso: 35
-  mix: 10
-  hard: 5
+  # Available: gaussian, clean, near_zero, low, iso, mix, hard. Sum: 100.
+  types:
+    gaussian: 100
+  # Sigma in [0, 1]; equal bounds mean fixed strength.
+  gaussian_sigma: [0.05, 0.05]
 
 eval:
   enabled: true
   seed: 42
-  sigma: 0.03
-  crop_size: 512
+  sigma: 0.05
+  crop_size: 768
+  modes: [gaussian]
+  # Diagnostic overfitting experiment only; not independent validation.
+  allow_train_overlap: true
 
 data:
   result_dir: data/result/
@@ -38,5 +43,5 @@ data:
   train_dir: data/train/
   ckpt_dir: checkpoints/
 
-  denoise_path: denoise.pth
-  denoise_checkpoint: denoise_cpt.pth
+  denoise_path: denoise_gaussian.pth
+  denoise_checkpoint: denoise_gaussian_cpt.pth

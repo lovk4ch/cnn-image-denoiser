@@ -7,16 +7,17 @@ from torch.utils.data import DataLoader
 from tqdm import tqdm
 
 from .dataset import ImageDataset, collate_patches
-from .progress import TrainingProgress
+from denoiser.diagnostics.training_log import TrainingProgress
 from .resources import EpochResources
 from .evaluator import evaluate
+from .metrics import DenoisingMetrics
+from denoiser.utils.paths import model_name
 from ..models.denoiser import Denoiser
-from ..utils.model import save_weights, load_weights, load_config, get_device, atomic_save
+from denoiser.training.weights import save_weights, load_weights, load_config, get_device, atomic_save
 from ..utils.errors import CheckpointError, CheckpointMessages
-from ..utils.results import create_result_dir
-from ..utils.noise import add_noise
-from ..utils.common import get_criterion, get_psnr, save_tensor_as_jpg, padding_cat, beep, \
-    img_to_tensor
+from denoiser.training.noise import add_noise
+from ..utils.common import get_criterion, save_tensor_as_jpg, padding_cat, beep, \
+    img_to_tensor, create_result_dir
 
 
 class Trainer:
@@ -44,12 +45,15 @@ class Trainer:
             try:
                 state = torch.load(self.checkpoint_path, map_location=self.device, weights_only=True)
 
-                if (state["config"]["denoise"] != self.cfg["denoise"] or
-                        state["config"]["train"]["loss"] != self.cfg["train"]["loss"]):
+                if model_name(state["config"]) != model_name(self.cfg):
                     raise ValueError(CheckpointMessages.CONFIG_MISMATCH)
 
                 self.model.load_state_dict(state["model"])
                 self.optim.load_state_dict(state["optimizer"])
+
+                for group in self.optim.param_groups:
+                    group["lr"] = self.cfg["train"]["lr"]
+
                 self.start_epoch = state["epoch"] + 1
                 self.step = state["step"]
                 self.best_loss = state["best_loss"]
@@ -76,7 +80,7 @@ class Trainer:
     def __call__(self, batch: Tensor) -> Tuple[Tensor, Tensor, Tensor]:
         # +[0..1]
         with torch.no_grad():
-            noisy = add_noise(batch, self.cfg.get("noise"))
+            noisy, self.noise_modes = add_noise(batch, self.cfg.get("noise"), return_modes=True)
 
         # [-1..1]
         batch = (batch * 2 - 1)
@@ -102,8 +106,11 @@ class Trainer:
         train_dir.mkdir(parents=True, exist_ok=True)
 
         result_dir = create_result_dir(self.cfg)
-        result_index = 1
-        progress = TrainingProgress(result_dir, self.previous_metrics)
+        result_index = max((int(path.stem) for path in result_dir.glob("*.jpg") if path.stem.isdigit()), default=0) + 1
+        progress = TrainingProgress(result_dir, self.previous_metrics,
+                                    live=self.cfg["train"].get("live_progress", False),
+                                    log_every=self.cfg["train"].get("log_every", 100),
+                                    diagnostic=self.cfg["eval"].get("allow_train_overlap", False))
 
         train_dataset = ImageDataset(
             crop_size=self.cfg["train"]["train_crop"],
@@ -135,11 +142,11 @@ class Trainer:
             resources.start()
 
             try:
-                bar = tqdm(train_loader, desc=f"\033[99mepoch {epoch}")
+                bar = tqdm(train_loader, desc=f"epoch {epoch}", disable=not progress.live)
 
                 g_loss = 0
-                g_psnr = 0
                 samples = 0
+                quality = DenoisingMetrics()
 
                 for batch in bar:
                     batch = batch.to(self.device, non_blocking=True)
@@ -147,11 +154,13 @@ class Trainer:
 
                     count = batch.size(0)
 
-                    with torch.no_grad():
-                        psnr = sum(get_psnr(batch[i], clean[i]) for i in range(count)) / count
+                    batch_quality = DenoisingMetrics()
+                    batch_quality.update(batch, noisy, clean, self.noise_modes)
+                    current = batch_quality.summary()["all"]
+                    quality.update(batch, noisy, clean, self.noise_modes)
+                    psnr = current["psnr"]
 
                     samples += count
-                    g_psnr += psnr * count
 
                     g_loss += self.loss * count
 
@@ -159,7 +168,9 @@ class Trainer:
                         grad_norm = self.grad
 
                     progress.batch(bar, samples=samples, total=len(train_dataset), loss=self.loss,
-                                   psnr=psnr, lr=self.optim.param_groups[0]["lr"], grad=grad_norm, step=index)
+                                   psnr=psnr, lr=self.optim.param_groups[0]["lr"], grad=grad_norm, step=index,
+                                   input_psnr=current["input_psnr"], gain=current["gain"],
+                                   mode=",".join(sorted(set(self.noise_modes))))
 
                     if result_every > 0 and index % result_every == 0:
                         out = [batch, noisy, clean]
@@ -180,9 +191,10 @@ class Trainer:
                 print()
 
                 g_loss /= samples
-                g_psnr /= samples
+                train_groups = quality.summary()
+                g_psnr = train_groups["all"]["psnr"]
                 improved = g_psnr > self.best_train_psnr
-                eval_metrics = evaluate(self.model, self.cfg, self.device, result_dir / f"eval_epoch_{epoch:05d}") if self.cfg["eval"]["enabled"] else None
+                eval_metrics = evaluate(self.model, self.cfg, self.device, result_dir / f"eval_epoch_{epoch:05d}.jpg") if self.cfg["eval"]["enabled"] else None
                 eval_psnr = eval_metrics["psnr"] if eval_metrics else None
 
                 if eval_metrics and self.eval_signature != eval_metrics["signature"]:
@@ -201,7 +213,7 @@ class Trainer:
                     "model": self.model.state_dict(), "optimizer": self.optim.state_dict(),
                     "epoch": epoch, "step": self.step, "best_loss": self.best_loss,
                     "config": self.cfg, "rng": torch.get_rng_state(),
-                    "metrics": {"loss": g_loss, "psnr": g_psnr},
+                    "metrics": {"loss": g_loss, "psnr": g_psnr, "groups": train_groups},
                     "best_train_psnr": self.best_train_psnr, "best_eval_psnr": self.best_eval_psnr,
                     "eval_metrics": eval_metrics,
                     "eval_signature": self.eval_signature,
@@ -226,6 +238,7 @@ class Trainer:
             progress.epoch(epoch, samples, g_loss, g_psnr, self.optim.param_groups[0]["lr"], improved, usage,
                            eval_psnr=eval_psnr, best_eval=eval_improved,
                            best_train_score=self.best_train_psnr,
-                           best_eval_score=self.best_eval_psnr if eval_psnr is not None else None)
+                           best_eval_score=self.best_eval_psnr if eval_psnr is not None else None,
+                           train_groups=train_groups, eval_groups=eval_metrics["groups"] if eval_metrics else None)
 
         beep()

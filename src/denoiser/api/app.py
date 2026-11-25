@@ -10,14 +10,14 @@ from fastapi.responses import StreamingResponse, FileResponse
 from fastapi.staticfiles import StaticFiles
 
 from denoiser import Denoiser
-from denoiser.request_types import Iterations
+from denoiser.api.request_types import Iterations
 from denoiser.utils.errors import ApiMessages
 from denoiser.utils.common import img_to_tensor, tensor_to_img
-from denoiser.utils.model import load_config, get_device, load_weights
+from denoiser.training.weights import load_config, get_device, load_weights
 
 BASE_DIR = Path(__file__).resolve().parents[1]
-FRONTEND_DIR = BASE_DIR / "static"
-MAX_IMAGE_SIDE = 512
+FRONTEND_DIR = Path(__file__).resolve().parents[3] / "static"
+MAX_IMAGE_SIDE = 4096
 MAX_UPLOAD_BYTES = 10 * 1024 * 1024
 
 

@@ -2,10 +2,12 @@ import sys
 from pathlib import Path
 
 import torch
+import yaml
 from torch import nn
 from torch.nn.functional import pad
 from torchvision.transforms import transforms as T
 from torchvision.transforms.v2.functional import resize, to_pil_image
+from .paths import result_directory
 
 
 def img_to_tensor(normalize=False, max_size=-1):
@@ -112,3 +114,13 @@ def get_criterion(cfg_loss):
         return nn.SmoothL1Loss(beta=delta)
 
     raise ValueError(f"Unknown loss: {name}")
+
+
+def create_result_dir(cfg):
+    """Reuse one results directory for layers, channels and dilation."""
+    path = result_directory(cfg)
+    path.mkdir(parents=True, exist_ok=True)
+    (path / "config.yaml").write_text(
+        yaml.safe_dump(cfg, allow_unicode=True, sort_keys=False).rstrip(), encoding="utf-8"
+    )
+    return path

@@ -46,7 +46,15 @@ class Denoiser(nn.Module):
 
         # --- общая активация ---
         # храним как поле, чтобы не создавать каждый раз
-        self.act = nn.ReLU(inplace=True)
+        activation = cfg.get("activation", "relu")
+
+        if activation not in {"relu", "leaky_relu"}:
+            raise ValueError(ModelMessages.INVALID_ACTIVATION)
+
+        def make_activation():
+            return nn.LeakyReLU(negative_slope=0.1, inplace=True) if activation == "leaky_relu" else nn.ReLU(inplace=True)
+
+        self.act = make_activation()
 
         # --- тело сети ---
         # регистрация слоёв в PyTorch
@@ -69,7 +77,7 @@ class Denoiser(nn.Module):
             if use_norm:
                 block.append(nn.GroupNorm(norm_groups, features))
 
-            block.append(nn.ReLU(inplace=True))
+            block.append(make_activation())
             blocks.append(nn.Sequential(*block))
 
         self.blocks = nn.ModuleList(blocks)
